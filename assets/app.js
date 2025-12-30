@@ -35,7 +35,7 @@ const elements = {
     pageInput: document.getElementById('page-input'),
     pageCount: document.getElementById('page-count'),
     thumbnails: document.getElementById('thumbnails-container'),
-    
+
     // settings
     settingsBtn: document.getElementById('settings-toggle-btn'),
     settingsPanel: document.getElementById('settings-panel'),
@@ -48,7 +48,7 @@ const elements = {
         b: document.getElementById('crop-bottom'),
         l: document.getElementById('crop-left'),
     },
-    
+
     // buttons
     prevBtn: document.getElementById('prev-page-btn'),
     nextBtn: document.getElementById('next-page-btn'),
@@ -85,7 +85,7 @@ async function init() {
 
 function loadState() {
     const params = new URLSearchParams(window.location.search);
-    
+
     // Page
     const p = parseInt(params.get('page'));
     if (p && p > 0) state.currentPage = p;
@@ -114,11 +114,13 @@ function updateURL() {
 
 async function loadPDF() {
     // Enable range requests for progressive loading
+    // CHANGED: Removed disableAutoFetch/disableStream to let PDF.js choose best method.
+    // For 30MB on GitHub Pages, default streaming usually works best.
     const loadingTask = pdfjsLib.getDocument({
         url: CONFIG.pdfPath,
         rangeChunkSize: 65536 * 2,
-        disableAutoFetch: true,
-        disableStream: true,
+        // disableAutoFetch: true, // Commented out to fix potential hanging
+        // disableStream: true,    // Commented out
     });
 
     loadingTask.onProgress = function (progress) {
@@ -127,14 +129,33 @@ async function loadPDF() {
             if (elements.loading.querySelector('p')) {
                 elements.loading.querySelector('p').innerText = `Loading Book... ${percent}%`;
             }
+        } else {
+            // If total is unknown (gzip etc), just show loaded
+            const loadedMB = (progress.loaded / (1024 * 1024)).toFixed(1);
+            if (elements.loading.querySelector('p')) {
+                elements.loading.querySelector('p').innerText = `Loading Book... ${loadedMB}MB`;
+            }
         }
     };
 
-    state.pdfDoc = await loadingTask.promise;
-    state.totalPages = state.pdfDoc.numPages;
-    elements.pageCount.innerText = `/ ${state.totalPages}`;
-    elements.pageInput.max = state.totalPages;
-    elements.loading.classList.add('hidden'); // Hide loading initially, but might need it for pages
+    try {
+        state.pdfDoc = await loadingTask.promise;
+        state.totalPages = state.pdfDoc.numPages;
+        elements.pageCount.innerText = `/ ${state.totalPages}`;
+        elements.pageInput.max = state.totalPages;
+        elements.loading.classList.add('hidden'); // Hide loading initially, but might need it for pages
+        console.log("PDF Loaded successfully. Pages:", state.totalPages);
+    } catch (error) {
+        console.error("PDF Load Error:", error);
+        elements.loading.innerHTML = `
+            <div style="text-align:center; color:#d32f2f;">
+                <p><strong>Error loading book</strong></p>
+                <p style="font-size:12px">${error.message}</p>
+                <button onclick="location.reload()" style="padding:8px 16px; margin-top:10px; cursor:pointer;">Retry</button>
+            </div>
+        `;
+        throw error; // Stop initialization
+    }
 }
 
 
@@ -168,11 +189,11 @@ function updateViewMode() {
 function initFlipMode() {
     // Clean up
     elements.bookElement.innerHTML = '';
-    
+
     // Create Pages (Just placeholders initially for PageFlip)
     // PageFlip works best if it knows the DOM exists. 
     // We will render content Lazy.
-    
+
     // We need to determine aspect ratio first from page 1
     state.pdfDoc.getPage(1).then(page => {
         const viewport = page.getViewport({ scale: 1 });
@@ -183,9 +204,9 @@ function initFlipMode() {
 
         // Initialize StPageFlip
         const isMobile = window.innerWidth < 768;
-        
+
         state.pageFlip = new PageFlip(elements.bookElement, {
-            width: width, 
+            width: width,
             height: height,
             size: isMobile ? 'fixed' : 'stretch',
             minWidth: 300,
@@ -201,7 +222,7 @@ function initFlipMode() {
         const fragment = document.createDocumentFragment();
         for (let i = 1; i <= state.totalPages; i++) {
             const wrapper = document.createElement('div');
-            wrapper.className = 'page-wrapper'; 
+            wrapper.className = 'page-wrapper';
             wrapper.dataset.density = 'hard'; // Hard cover for 1 and last? maybe soft
             wrapper.innerHTML = `<div class="page-content" id="flip-page-${i}">
                 <div class="loader">Loading...</div>
@@ -212,22 +233,22 @@ function initFlipMode() {
         }
         // StPageFlip loadFromHTML takes NodeList
         // actually standard way: just append children then pageFlip.loadFromHTML(items)
-        
+
         // Wait... StPageFlip works best with existing DOM or dynamic mode. 
         // For 350 pages, dynamic mode (images) is standard, but we want HTML (canvas) for crispness.
         // We will inject ALL wrappers but empty.
-        
+
         elements.bookElement.appendChild(fragment);
-        
+
         state.pageFlip.loadFromHTML(document.querySelectorAll('.page-wrapper'));
-        
+
         // Go to current page
         // PageFlip is 0-indexed? No. 
         // But let's check docs. Yes, usually page index.
         // BUT 1-based page numbers.
         // If we want page 18.
         if (state.currentPage > 1) {
-            state.pageFlip.turnToPage(state.currentPage - 1); 
+            state.pageFlip.turnToPage(state.currentPage - 1);
         }
 
         // Event Listeners
@@ -246,16 +267,16 @@ function initFlipMode() {
 
 function renderVisibleFlipPages() {
     if (!state.pageFlip) return;
-    
+
     // Get visible pages range. 
     // Usually current spread +/- 1
     // StPageFlip doesn't give "visible" easily, but we know index
     // If spread: index, index+1. 
-    
+
     const currIndex = state.pageFlip.getCurrentPageIndex(); // 0-based
     // Render current, prev, next
     const range = [currIndex, currIndex + 1, currIndex - 1, currIndex + 2];
-    
+
     range.forEach(idx => {
         const pageNum = idx + 1; // 1-based
         if (pageNum >= 1 && pageNum <= state.totalPages) {
@@ -271,11 +292,11 @@ async function renderFlipPage(pageNum) {
     try {
         const page = await state.pdfDoc.getPage(pageNum);
         const [canvas, ctx] = createPageCanvas(page);
-        
+
         container.innerHTML = '';
         container.appendChild(canvas);
         container.setAttribute('data-rendered', 'true');
-    } catch(e) {
+    } catch (e) {
         console.error("Error render flip page", e);
     }
 }
@@ -285,7 +306,7 @@ async function renderFlipPage(pageNum) {
 
 function initScrollMode() {
     elements.scrollContent.innerHTML = '';
-    
+
     // Create container placeholders for ALL pages to maintain scroll height
     // But we need height estimation. 
     // We'll fetch Page 1 to get standard size.
@@ -293,7 +314,7 @@ function initScrollMode() {
         const viewport = page.getViewport({ scale: CONFIG.baseScale });
         const croppedWidth = viewport.width * (1 - (state.crop.l + state.crop.r) / 100);
         const croppedHeight = viewport.height * (1 - (state.crop.t + state.crop.b) / 100);
-        
+
         // Create IntersectionObserver
         state.observer = new IntersectionObserver((entries) => {
             entries.forEach(entry => {
@@ -320,12 +341,12 @@ function initScrollMode() {
             // Using CSS wrapper to maintain Aspect Ratio?
             // Simple approach: min-height
             pageDiv.style.width = '100%';
-            pageDiv.style.maxWidth = `${croppedWidth}px`; 
+            pageDiv.style.maxWidth = `${croppedWidth}px`;
             pageDiv.style.aspectRatio = `${croppedWidth}/${croppedHeight}`;
-            
+
             // Add skeleton
             pageDiv.innerHTML = '<div class="loader">Loading...</div>';
-            
+
             elements.scrollContent.appendChild(pageDiv);
             state.observer.observe(pageDiv);
         }
@@ -335,7 +356,7 @@ function initScrollMode() {
             const target = document.querySelector(`.scroll-page[data-page-number="${state.currentPage}"]`);
             if (target) target.scrollIntoView();
         }, 100);
-        
+
         // Scroll Listeners for Page Number update
         elements.scrollContainer.addEventListener('scroll', handleScrollUpdate);
     });
@@ -350,7 +371,7 @@ function handleScrollUpdate() {
     // throttle this...
     // simpler: usage of Io entries works for rendering, 
     // but for "Current Page" UI update, we need center point.
-    
+
     const containerMid = elements.scrollContainer.scrollTop + elements.scrollContainer.clientHeight / 2;
     // ... logic to find page at mid ... 
     // Let's skip heavy calculation for now, just update when we click.
@@ -360,26 +381,26 @@ async function renderScrollPage(container, pageNum) {
     if (container.getAttribute('data-rendered') === 'true') return;
 
     const page = await state.pdfDoc.getPage(pageNum);
-    
+
     // We want TEXT LAYER in scroll mode!
     // Setup generic Canvas
-    const [canvas, ctx, viewport] = createPageCanvas(page, true); 
+    const [canvas, ctx, viewport] = createPageCanvas(page, true);
     // createPageCanvas returns [canvas, context, originalViewport]
-    
+
     container.innerHTML = '';
     const wrapper = document.createElement('div');
     wrapper.style.position = 'relative';
     wrapper.style.display = 'inline-block';
-    
+
     wrapper.appendChild(canvas);
-    
+
     // Text Layer
     // We need to match the CROP on text layer too.
     const textLayerDiv = document.createElement('div');
     textLayerDiv.className = 'textLayer';
     textLayerDiv.style.width = canvas.style.width;
     textLayerDiv.style.height = canvas.style.height;
-    
+
     // Calculate Text Layer Transform
     // Canvas is shifted by negative margins.
     // Text Layer is overlay.
@@ -387,10 +408,10 @@ async function renderScrollPage(container, pageNum) {
     // Easier: Shift TextLayer Div same as canvas negative margin?
     // Actually, createPageCanvas returns a canvas that IS the cropped view usually?
     // My method returns a canvas with negative margins inside a container...
-    
+
     // Let's refine createPageCanvas to return a wrapper that handles crop.
-    
-    
+
+
     wrapper.appendChild(textLayerDiv);
     container.appendChild(wrapper);
 
@@ -402,18 +423,18 @@ async function renderScrollPage(container, pageNum) {
         viewport: viewport, // Text layer needs FULL viewport
         textDivs: []
     });
-    
+
     // Apply CROP to TextLayer
     // The viewport above is full. The textLayerDiv is full size.
     // But the Wrapper has overflow: hidden.
     // We need to position textLayerDiv matching the canvas offset.
     const cropL = viewport.width * (state.crop.l / 100);
     const cropT = viewport.height * (state.crop.t / 100);
-    
+
     textLayerDiv.style.position = 'absolute';
     textLayerDiv.style.left = `-${cropL}px`;
     textLayerDiv.style.top = `-${cropT}px`;
-    
+
     container.setAttribute('data-rendered', 'true');
 }
 
@@ -422,14 +443,14 @@ async function renderScrollPage(container, pageNum) {
 
 function createPageCanvas(page, returnViewport = false) {
     const viewport = page.getViewport({ scale: CONFIG.baseScale * state.zoom });
-    
+
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
 
     // Dimensions
     canvas.width = viewport.width;
     canvas.height = viewport.height;
-    
+
     // Styles for display (CSS pixels)
     canvas.style.width = `${viewport.width}px`;
     canvas.style.height = `${viewport.height}px`;
@@ -443,30 +464,30 @@ function createPageCanvas(page, returnViewport = false) {
     // APPLY CROP (Visual)
     // We'll wrap this canvas in a div with overflow hidden
     // and negative margins.
-    
+
     // Actually, simpler to return the canvas and let caller style it?
     // No, let's process it.
-    
+
     // Crop pixels
     const cropL = viewport.width * (state.crop.l / 100);
     const cropT = viewport.height * (state.crop.t / 100);
     const cropR = viewport.width * (state.crop.r / 100);
     const cropB = viewport.height * (state.crop.b / 100);
-    
+
     // We want the Visible Canvas to be smaller.
     // But drawing to a smaller canvas is complex (drawImage).
     // CSS Masking is faster and keeps resolution.
-    
+
     canvas.style.marginLeft = `-${cropL}px`;
     canvas.style.marginTop = `-${cropT}px`;
-    
+
     // We return the Canvas. The CALLER must put it in a container 
     // with width = W - L - R and overflow hidden.
-    
+
     // If we return just canvas, caller needs dimensions.
     // Let's modify the canvas style directly here?
     // No, wrapper is needed.
-    
+
     if (returnViewport) return [canvas, ctx, viewport];
     return [canvas, ctx];
 }
@@ -483,7 +504,7 @@ elements.prevBtn.onclick = () => {
 
 elements.nextBtn.onclick = () => {
     if (state.mode === 'flip') state.pageFlip.flipNext();
-    else { 
+    else {
         state.currentPage = Math.min(state.totalPages, state.currentPage + 1);
     }
 };
@@ -492,7 +513,7 @@ elements.pageInput.onchange = (e) => {
     let p = parseInt(e.target.value);
     if (p < 1) p = 1;
     if (p > state.totalPages) p = state.totalPages;
-    
+
     if (state.mode === 'flip') {
         state.pageFlip.turnToPage(p - 1); // 0-based
     } else {
@@ -522,7 +543,7 @@ function resetRender() {
     // Clear caches
     state.renderedPages.clear();
     // Re-init current mode
-    updateViewMode(); 
+    updateViewMode();
 }
 
 // --- SETTINGS ---
@@ -544,10 +565,10 @@ elements.cropPreset.onchange = (e) => {
 };
 
 function updateCropFromPreset(val) {
-    if (val === 'none') state.crop = { preset: val, t:0, r:0, b:0, l:0 };
-    if (val === 'light') state.crop = { preset: val, t:2, r:2, b:2, l:2 };
-    if (val === 'medium') state.crop = { preset:val, t:4, r:4, b:4, l:4 };
-    if (val === 'strong') state.crop = { preset:val, t:6, r:6, b:6, l:6 };
+    if (val === 'none') state.crop = { preset: val, t: 0, r: 0, b: 0, l: 0 };
+    if (val === 'light') state.crop = { preset: val, t: 2, r: 2, b: 2, l: 2 };
+    if (val === 'medium') state.crop = { preset: val, t: 4, r: 4, b: 4, l: 4 };
+    if (val === 'strong') state.crop = { preset: val, t: 6, r: 6, b: 6, l: 6 };
     // Custom logic omitted for brevity, but UI is there
 }
 
