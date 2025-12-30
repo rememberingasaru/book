@@ -210,9 +210,9 @@ function initFlipMode() {
             height: height,
             size: isMobile ? 'fixed' : 'stretch',
             minWidth: 300,
-            maxWidth: 1000,
+            maxWidth: 2000,
             minHeight: 400,
-            maxHeight: 1200,
+            maxHeight: 2000,
             maxShadowOpacity: 0.5,
             showCover: true,
             mobileScrollSupport: false // handled by us or native
